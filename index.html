@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CODE GEAR SQLite Studio</title>
+
+<!-- SQL.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js"></script>
+
+<!-- Monaco Editor -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  height: 100vh;
+  background: #1e1e1e;
+  color: #ddd;
+  font-family: monospace;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+header {
+  background: #252526;
+  padding: 8px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-weight: bold;
+}
+
+/* Layout */
+.container {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Sidebar */
+aside {
+  width: 220px;
+  background: #333;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+aside h3 {
+  margin-top: 0;
+  font-size: 14px;
+  color: #9cdcfe;
+}
+
+aside ul {
+  list-style: none;
+  padding: 0;
+}
+
+aside li {
+  padding: 6px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+aside li:hover {
+  background: #444;
+}
+
+/* Main */
+main {
+  flex: 1;
+  background: #1e1e1e;
+  overflow: auto;
+}
+
+/* Table wrapper */
+.table-wrapper {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+}
+
+/* Table */
+table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  background: #252526;
+  z-index: 2;
+}
+
+th, td {
+  border: 1px solid #333;
+  padding: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* Row number */
+.rowno {
+  background: #2d2d2d;
+  color: #9cdcfe;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+/* SQL Bar */
+footer {
+  background: #252526;
+  padding: 8px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+#editor {
+  flex: 1;
+  height: 80px;
+  border: 1px solid #333;
+}
+
+button {
+  background: #0e639c;
+  color: white;
+  border: none;
+  padding: 0 16px;
+  cursor: pointer;
+  border-radius: 4px;
+  height: 40px;
+}
+
+button:hover {
+  opacity: 0.85;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  🧠 CODE GEAR SQLite Studio
+  <input type="file" id="dbFile" accept=".db,.sqlite">
+  <span id="dbName">No DB Loaded</span>
+  <button onclick="downloadDB()">Download DB</button>
+</header>
+
+<div class="container">
+  <aside>
+    <h3>Tables</h3>
+    <ul id="tableList"></ul>
+  </aside>
+
+  <main>
+    <div class="table-wrapper">
+      <table id="result"></table>
+    </div>
+  </main>
+</div>
+
+<footer>
+  <div id="editor"></div>
+  <button onclick="runSQL()">Execute</button>
+</footer>
+
+<script>
+let db, SQL, editor;
+
+/* Init SQLite */
+initSqlJs({
+  locateFile: f =>
+    `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/${f}`
+}).then(sql => SQL = sql);
+
+/* Monaco Editor Init */
+require.config({
+  paths: {
+    vs: "https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs"
+  }
+});
+
+require(["vs/editor/editor.main"], function () {
+  editor = monaco.editor.create(document.getElementById("editor"), {
+    value: "SELECT * FROM sqlite_master;",
+    language: "sql",
+    theme: "vs-dark",
+    automaticLayout: true,
+    fontSize: 14,
+    minimap: { enabled: false }
+  });
+});
+
+/* Load DB */
+document.getElementById("dbFile").addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  document.getElementById("dbName").innerText = file.name;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    db = new SQL.Database(new Uint8Array(reader.result));
+    loadTables();
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+/* Load tables */
+function loadTables() {
+  const res = db.exec(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
+  );
+
+  const list = document.getElementById("tableList");
+  list.innerHTML = "";
+
+  res[0].values.forEach(t => {
+    const li = document.createElement("li");
+    li.innerText = t[0];
+    li.onclick = () => showTable(t[0]);
+    list.appendChild(li);
+  });
+}
+
+/* Show table */
+function showTable(name) {
+  editor.setValue(`SELECT * FROM ${name} LIMIT 200;`);
+  runSQL();
+}
+
+/* Run SQL */
+function runSQL() {
+  if (!db) return alert("Load database first");
+
+  const q = editor.getValue();
+  const table = document.getElementById("result");
+  table.innerHTML = "";
+
+  try {
+    const res = db.exec(q);
+    if (!res.length) return;
+
+    const { columns, values } = res[0];
+
+    table.innerHTML +=
+      "<tr><th class='rowno'>#</th>" +
+      columns.map(c => `<th>${c}</th>`).join("") +
+      "</tr>";
+
+    values.forEach((r, i) => {
+      table.innerHTML +=
+        "<tr><td class='rowno'>" + (i + 1) + "</td>" +
+        r.map(v => `<td>${v}</td>`).join("") +
+        "</tr>";
+    });
+
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+/* Download DB */
+function downloadDB() {
+  if (!db) return alert("No database loaded");
+
+  const data = db.export();
+  const blob = new Blob([data], {
+    type: "application/octet-stream"
+  });
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+
+  const name = document.getElementById("dbName").innerText;
+  a.download = name
+    ? name.replace(".db", "_modified.db")
+    : "modified.db";
+
+  a.href = url;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+</script>
+
+</body>
+</html>
