@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CODE GEAR SQLite Studio</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js"></script>
+
+<script src="https://unpkg.com/monaco-editor@0.45.0/min/vs/loader.js"></script>
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  height: 100vh;
+  background: #1e1e1e;
+  color: #ddd;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+header {
+  background: #252526;
+  padding: 10px 15px;
+  display: flex;
+  gap: 15px;
+  align-items: center;
+  border-bottom: 1px solid #333;
+}
+
+#dbName {
+  font-weight: bold;
+  color: #4ec9b0;
+}
+
+/* Layout */
+.container {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Sidebar */
+aside {
+  width: 240px;
+  background: #252526;
+  padding: 10px;
+  overflow-y: auto;
+  border-right: 1px solid #333;
+}
+
+aside h3 {
+  margin-top: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  color: #858585;
+  letter-spacing: 1px;
+}
+
+aside ul {
+  list-style: none;
+  padding: 0;
+}
+
+aside li {
+  padding: 8px 10px;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #cccccc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+aside li:hover {
+  background: #37373d;
+  color: #fff;
+}
+
+/* Main Table Area */
+main {
+  flex: 1;
+  background: #1e1e1e;
+  overflow: auto;
+}
+
+.table-wrapper {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+}
+
+table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  background: #2d2d2d;
+  color: #fff;
+  z-index: 2;
+  font-weight: 600;
+  text-align: left;
+}
+
+th, td {
+  border: 1px solid #333;
+  padding: 8px 12px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+tr:nth-child(even) {
+  background: #2a2a2a;
+}
+
+.rowno {
+  background: #252526 !important;
+  color: #858585;
+  text-align: center;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: 40px;
+}
+
+/* Footer & Editor */
+footer {
+  background: #1e1e1e;
+  border-top: 1px solid #333;
+  display: flex;
+  flex-direction: column;
+}
+
+#editor {
+  height: 180px;
+}
+
+.sql-actions {
+  padding: 8px 15px;
+  background: #252526;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid #333;
+}
+
+button {
+  background: #0e639c;
+  color: white;
+  border: none;
+  padding: 6px 16px;
+  cursor: pointer;
+  border-radius: 2px;
+  font-size: 13px;
+}
+
+button:hover {
+  background: #1177bb;
+}
+
+input[type="file"] {
+  font-size: 12px;
+  color: #ccc;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <input type="file" id="dbFile" accept=".db,.sqlite">
+  <span id="dbName">No Database Loaded</span>
+  <button onclick="downloadDB()">Download DB</button>
+</header>
+
+<div class="container">
+  <aside>
+    <h3>Tables</h3>
+    <ul id="tableList"></ul>
+  </aside>
+
+  <main>
+    <div class="table-wrapper">
+      <table id="result"></table>
+    </div>
+  </main>
+</div>
+
+<footer>
+  <div id="editor"></div>
+  <div class="sql-actions">
+    <button onclick="runSQL()">Execute (Ctrl + Enter)</button>
+  </div>
+</footer>
+
+<script>
+let db, SQL, editor;
+let tableSchema = {}; // স্টোর করবে {tableName: [columns]}
+
+/* 1. Init SQLite WASM */
+initSqlJs({
+  locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/${f}`
+}).then(sql => SQL = sql);
+
+/* 2. Init Monaco Editor & IntelliSense */
+require.config({ paths: { vs: "https://unpkg.com/monaco-editor@0.45.0/min/vs" } });
+
+require(["vs/editor/editor.main"], () => {
+  // ইন্টেলিসেন্স প্রোভাইডার (Autocompletion)
+  monaco.languages.registerCompletionItemProvider('sql', {
+    provideCompletionItems: (model, position) => {
+      let suggestions = [];
+
+      // টেবিল নাম সাজেস্ট করবে
+      Object.keys(tableSchema).forEach(table => {
+        suggestions.push({
+          label: table,
+          kind: monaco.languages.CompletionItemKind.Class,
+          insertText: table,
+          detail: 'Table'
+        });
+
+        // ঐ টেবিলের কলাম নাম সাজেস্ট করবে
+        tableSchema[table].forEach(col => {
+          suggestions.push({
+            label: `${table}.${col}`,
+            kind: monaco.languages.CompletionItemKind.Field,
+            insertText: col,
+            detail: `Column in ${table}`
+          });
+        });
+      });
+
+      // স্ট্যান্ডার্ড SQL কীওয়ার্ডস
+      const keywords = ["SELECT", "FROM", "WHERE", "INSERT", "INTO", "UPDATE", "SET", "DELETE", "JOIN", "ON", "LIMIT", "ORDER BY", "GROUP BY", "VALUES", "CREATE", "TABLE"];
+      keywords.forEach(kw => {
+        suggestions.push({
+          label: kw,
+          kind: monaco.languages.CompletionItemKind.Keyword,
+          insertText: kw
+        });
+      });
+
+      return { suggestions: suggestions };
+    }
+  });
+
+  editor = monaco.editor.create(document.getElementById("editor"), {
+    value: "-- Load a DB and write SQL here\nSELECT * FROM sqlite_master;",
+    language: "sql",
+    theme: "vs-dark",
+    automaticLayout: true,
+    minimap: { enabled: false },
+    fontSize: 14,
+    suggestOnTriggerCharacters: true,
+    fontFamily: "'Fira Code', monospace"
+  });
+
+  // Ctrl + Enter দিয়ে রান করার কমান্ড
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runSQL());
+});
+
+/* 3. ডাটাবেস থেকে টেবিল এবং কলামের লিস্ট বের করা */
+function updateIntelliSense() {
+  tableSchema = {};
+  try {
+    const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';");
+    if (tables.length) {
+      tables[0].values.forEach(row => {
+        const tableName = row[0];
+        const columns = db.exec(`PRAGMA table_info('${tableName}');`);
+        if (columns.length) {
+          tableSchema[tableName] = columns[0].values.map(col => col[1]);
+        }
+      });
+    }
+  } catch (e) { console.error("IntelliSense Error:", e); }
+}
+
+/* 4. ফাইল লোড করা */
+document.getElementById("dbFile").addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  document.getElementById("dbName").innerText = file.name;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      db = new SQL.Database(new Uint8Array(reader.result));
+      updateIntelliSense(); 
+      loadTables();
+      editor.setValue(`SELECT * FROM ${Object.keys(tableSchema)[0] || 'sqlite_master'} LIMIT 100;`);
+    } catch (err) {
+      alert("Invalid SQLite file: " + err.message);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+/* 5. সাইডবার টেবিল লিস্ট */
+function loadTables() {
+  const res = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';");
+  const list = document.getElementById("tableList");
+  list.innerHTML = "";
+
+  if (res.length) {
+    res[0].values.forEach(t => {
+      const li = document.createElement("li");
+      li.innerText = `📁 ${t[0]}`;
+      li.onclick = () => {
+        editor.setValue(`SELECT * FROM ${t[0]} LIMIT 200;`);
+        runSQL();
+      };
+      list.appendChild(li);
+    });
+  }
+}
+
+/* 6. SQL রান করা */
+function runSQL() {
+  if (!db) return alert("Please load a database file first.");
+
+  const query = editor.getValue();
+  const tableElement = document.getElementById("result");
+  tableElement.innerHTML = "";
+
+  try {
+    const res = db.exec(query);
+    if (!res.length) {
+      tableElement.innerHTML = "<tr><td style='padding:20px;'>Query executed successfully (No results to display).</td></tr>";
+      return;
+    }
+
+    const { columns, values } = res[0];
+
+    // টেবিল হেড
+    let headerHtml = "<tr><th class='rowno'>#</th>" + columns.map(c => `<th>${c}</th>`).join("") + "</tr>";
+    
+    // টেবিল বডি (Data)
+    let rowsHtml = values.map((r, i) => {
+      return `<tr><td class='rowno'>${i + 1}</td>` + r.map(v => `<td>${v === null ? '<i style="color:#666">NULL</i>' : v}</td>`).join("") + "</tr>";
+    }).join("");
+
+    tableElement.innerHTML = headerHtml + rowsHtml;
+
+  } catch (e) {
+    alert("SQL Error: " + e.message);
+  }
+}
+
+/* 7. ডাউনলোড ফাংশন */
+function downloadDB() {
+  if (!db) return alert("No database to download.");
+
+  const data = db.export();
+  const blob = new Blob([data], { type: "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const originalName = document.getElementById("dbName").innerText;
+  
+  a.download = originalName !== "No Database Loaded" 
+    ? originalName.replace(".db", "_mod.db") 
+    : "database_modified.db";
+    
+  a.href = url;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+</script>
+
+</body>
+                                                                                 </html>
