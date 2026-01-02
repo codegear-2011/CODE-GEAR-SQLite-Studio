@@ -1,6 +1,6 @@
 # 🧠 CODE GEAR SQLite Studio
 ### A Full-Featured Browser-Based SQLite Database Studio
-
+[![chrome-screenshot-2-ja-na-2026-9-46-25-AM-IST.jpg](https://i.postimg.cc/Pf0SffWQ/chrome-screenshot-2-ja-na-2026-9-46-25-AM-IST.jpg)](https://postimg.cc/s19Ywr0M)
 **CODE GEAR SQLite Studio** is a powerful, modern, browser-based SQLite database manager built entirely with **HTML, CSS, and JavaScript**, running **100% on the client side**.  
 It allows you to **open, explore, query, modify, and export SQLite databases** directly from your browser — **without installing SQLite, without a backend, and without a server**.
 
